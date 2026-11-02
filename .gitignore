@@ -22,3 +22,6 @@ Thumbs.db
 # Environment / Secrets
 .env
 .env.local
+
+# Temp debug profiles
+temp_edge_profile/
