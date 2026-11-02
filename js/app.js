@@ -655,16 +655,26 @@ async function openBenchDetailModal(benchId) {
       }
     }
 
-    // Show "Uredi" button if current logged-in user is the owner of this bench
+    // Show "Uredi" and "Obriši" buttons if current logged-in user is the owner of this bench
+    const isOwner = Boolean(state.currentUser && bench.user_id && bench.user_id === state.currentUser.id);
     const editBtn = document.getElementById('modalEditBenchBtn');
     if (editBtn) {
-      const isOwner = Boolean(state.currentUser && bench.user_id && bench.user_id === state.currentUser.id);
       if (isOwner) {
         editBtn.classList.remove('hidden');
         editBtn.classList.add('flex');
       } else {
         editBtn.classList.add('hidden');
         editBtn.classList.remove('flex');
+      }
+    }
+    const deleteBtn = document.getElementById('modalDeleteBenchBtn');
+    if (deleteBtn) {
+      if (isOwner) {
+        deleteBtn.classList.remove('hidden');
+        deleteBtn.classList.add('flex');
+      } else {
+        deleteBtn.classList.add('hidden');
+        deleteBtn.classList.remove('flex');
       }
     }
 
@@ -1764,6 +1774,13 @@ async function loadUserBenches() {
             <i class="ph-bold ph-pencil-simple"></i>
             <span>Uredi</span>
           </button>
+          <button 
+            type="button" 
+            class="delete-bench-from-profile p-1.5 text-xs font-semibold text-rose-400 bg-rose-950/40 hover:bg-rose-600 hover:text-white rounded-lg transition border border-rose-900/60 flex items-center justify-center cursor-pointer"
+            title="Obriši ovu klupicu"
+          >
+            <i class="ph-bold ph-trash text-sm"></i>
+          </button>
         </div>
       `;
 
@@ -1773,12 +1790,17 @@ async function loadUserBenches() {
         if (map && bench.latitude && bench.longitude) {
           map.setView([bench.latitude, bench.longitude], 16, { animate: true });
         }
-        openBenchDetail(bench.id);
+        openBenchDetailModal(bench.id);
       });
 
       // Wire edit button
       card.querySelector('.edit-bench-from-profile')?.addEventListener('click', () => {
         openEditBenchModal(bench);
+      });
+
+      // Wire delete button
+      card.querySelector('.delete-bench-from-profile')?.addEventListener('click', () => {
+        handleDeleteBench(bench.id);
       });
 
       listContainer.appendChild(card);
@@ -1902,7 +1924,7 @@ document.getElementById('editBenchForm')?.addEventListener('submit', async (e) =
     // Update in state.selectedBench if currently open
     if (state.selectedBench && state.selectedBench.id == benchId) {
       state.selectedBench = { ...state.selectedBench, ...updatedBench, title, city, condition, description, tags };
-      renderDetailModal(state.selectedBench);
+      openBenchDetailModal(benchId);
     }
 
     // Refresh UI
@@ -1930,7 +1952,44 @@ document.getElementById('editBenchForm')?.addEventListener('submit', async (e) =
   }
 });
 
-// Event listeners for profile and edit modal triggers
+// DELETE BENCH HANDLER
+async function handleDeleteBench(benchId) {
+  if (!benchId) return;
+
+  const confirmed = window.confirm('Jeste li sigurni da želite trajno obrisati ovu klupicu? Ova radnja se ne može poništiti.');
+  if (!confirmed) return;
+
+  try {
+    await BenchAPI.deleteBench(benchId);
+
+    // Remove from state.benches and state.userBenches
+    state.benches = state.benches.filter(b => b.id != benchId);
+    state.userBenches = state.userBenches.filter(b => b.id != benchId);
+
+    // If detail modal is open for this bench, close it
+    if (state.selectedBench && state.selectedBench.id == benchId) {
+      state.selectedBench = null;
+      closeDetailModal();
+    }
+
+    // If edit modal is open, close it
+    closeEditBenchModal();
+
+    // Refresh User Profile list if open
+    loadUserBenches();
+
+    // Re-render map markers and side panel cards
+    renderMarkers();
+    renderSidePanelCards();
+
+    showToast('Klupica je uspješno obrisana. 🗑️');
+  } catch (err) {
+    console.error('Greška pri brisanju klupice:', err);
+    showToast('Greška pri brisanju: ' + (err.message || 'Pokušajte ponovno.'), 'error');
+  }
+}
+
+// Event listeners for profile, edit and delete modal triggers
 document.getElementById('openProfileBtn')?.addEventListener('click', openUserProfileModal);
 document.getElementById('closeUserProfileBtn')?.addEventListener('click', closeUserProfileModal);
 document.getElementById('userProfileModal')?.addEventListener('click', (e) => {
@@ -1943,6 +2002,13 @@ document.getElementById('profileAddBenchCTA')?.addEventListener('click', () => {
 
 document.getElementById('modalEditBenchBtn')?.addEventListener('click', () => {
   if (state.selectedBench) openEditBenchModal(state.selectedBench);
+});
+document.getElementById('modalDeleteBenchBtn')?.addEventListener('click', () => {
+  if (state.selectedBench) handleDeleteBench(state.selectedBench.id);
+});
+document.getElementById('deleteBenchBtn')?.addEventListener('click', () => {
+  const benchId = document.getElementById('editBenchId')?.value;
+  if (benchId) handleDeleteBench(benchId);
 });
 document.getElementById('closeEditBenchBtn')?.addEventListener('click', closeEditBenchModal);
 document.getElementById('cancelEditBtn')?.addEventListener('click', closeEditBenchModal);

@@ -589,6 +589,31 @@ const BenchAPI = {
     }
   },
 
+  // Brisanje klupice (dozvoljeno isključivo prijavljenom vlasniku putem RLS-a)
+  async deleteBench(benchId) {
+    if (!supabaseClient) {
+      const idx = localBenchesState.findIndex(b => b.id == benchId);
+      if (idx !== -1) {
+        localBenchesState.splice(idx, 1);
+        return true;
+      }
+      throw new Error('Klupica nije pronađena u memoriji.');
+    }
+
+    try {
+      const { error } = await supabaseClient
+        .from('benches')
+        .delete()
+        .eq('id', benchId);
+
+      if (error) throw error;
+      return true;
+    } catch (err) {
+      console.error('Greška pri brisanju klupice u Supabase:', err);
+      throw err;
+    }
+  },
+
   // Add comment
   async addComment(benchId, author, content, userId = null) {
     if (typeof benchId === 'string' && benchId.startsWith('ai-')) {
