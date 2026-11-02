@@ -18,6 +18,23 @@ const state = {
   currentUser: null
 };
 
+// Security: XSS Sanitization helper for user-generated inputs
+function escapeHtml(unsafe) {
+  if (unsafe === null || unsafe === undefined) return '';
+  return String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Anti-Spam Cooldown Configuration (in milliseconds)
+const BENCH_COOLDOWN_MS = 25000;   // 25 sekundi između dodavanja klupica
+const COMMENT_COOLDOWN_MS = 10000; // 10 sekundi između komentara
+let lastBenchSubmitTimestamp = 0;
+let lastCommentSubmitTimestamp = 0;
+
 // Europe geographic bounds to restrict map panning to Europe only
 const EUROPE_BOUNDS = L.latLngBounds(
   L.latLng(32.0, -25.0), // Southwest (Southern Mediterranean & Atlantic)
@@ -268,16 +285,19 @@ function getConditionBadge(condition) {
 
 // Initialize Leaflet Map
 function initMap() {
-  const croatiaCenter = [44.8, 16.3];
+  const isMobile = window.innerWidth < 640;
+  const croatiaCenter = isMobile ? [44.6, 16.4] : [44.8, 16.3];
+  const initialZoom = isMobile ? 6.5 : 7.5;
   
   map = L.map('map', {
     center: croatiaCenter,
-    zoom: 7.5,
+    zoom: initialZoom,
     minZoom: 5, // Prevents zooming out to the whole world
     maxZoom: layerConfigs.satellite.maxZoom,
     maxBounds: EUROPE_BOUNDS, // Confines map to Europe
     maxBoundsViscosity: 1.0,  // Hard boundary preventing dragging outside Europe
-    zoomControl: false
+    zoomControl: false,
+    tap: true // Ensure touch events register smoothly on mobile
   });
 
   // Add zoom control to bottom right
@@ -411,13 +431,18 @@ function updateUI() {
     const tierDisplay = getTierDisplay(bench.condition);
     const tierColor = getTierColor(tierDisplay);
 
+    const safeTitle = escapeHtml(bench.title || 'Klupica');
+    const safeCity = escapeHtml(bench.city || 'Hrvatska');
+    const safeDesc = escapeHtml(bench.description || 'Nema opisa.');
+    const safeAuthor = escapeHtml(bench.author || 'Korisnik');
+
     const isVerifiedBench = (bench.user_id !== null && bench.user_id !== undefined) || 
                             (bench.author && bench.author.trim() !== '' && bench.author.trim().toLowerCase() !== 'anonimni šetač');
     let authorBadgePopup;
     if (bench.is_ai) {
       authorBadgePopup = `<span class="inline-flex items-center gap-1 text-[10px] text-purple-400 font-semibold truncate max-w-[100px]" title="AI Baza klupica u RH"><i class="ph-bold ph-sparkle flex-shrink-0"></i> AI Baza</span>`;
     } else if (isVerifiedBench) {
-      authorBadgePopup = `<span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-semibold truncate max-w-[100px]"><i class="ph-bold ph-check-circle flex-shrink-0"></i> <span class="truncate">${bench.author || 'Korisnik'}</span></span>`;
+      authorBadgePopup = `<span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-semibold truncate max-w-[100px]"><i class="ph-bold ph-check-circle flex-shrink-0"></i> <span class="truncate">${safeAuthor}</span></span>`;
     } else {
       authorBadgePopup = `<span class="inline-flex items-center gap-1 text-[10px] text-slate-500 font-medium"><i class="ph-bold ph-mask-happy flex-shrink-0"></i> Anonimno</span>`;
     }
@@ -426,9 +451,9 @@ function updateUI() {
       <div class="w-60 overflow-hidden cursor-pointer bg-slate-900 text-slate-100" onclick="openBenchDetailModal('${bench.id}')">
         ${thumbUrl ? `
           <div class="h-32 w-full bg-slate-800 overflow-hidden relative">
-            <img src="${thumbUrl}" alt="${bench.title}" class="w-full h-full object-cover transition-transform duration-300 hover:scale-105">
+            <img src="${thumbUrl}" alt="${safeTitle}" loading="lazy" class="w-full h-full object-cover transition-transform duration-300 hover:scale-105" onerror="this.onerror=null; this.src='./img/logo.jpg';">
             <div class="absolute bottom-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-black/70 text-white backdrop-blur-sm">
-              📍 ${bench.city || 'Hrvatska'}
+              📍 ${safeCity}
             </div>
             <div class="absolute top-2 right-2 px-1.5 py-0.5 rounded font-black text-[10px] bg-black/80 text-white backdrop-blur-sm shadow-sm" style="color: ${tierColor};">
               ${tierDisplay} TIER
@@ -436,15 +461,15 @@ function updateUI() {
           </div>
         ` : `
           <div class="px-3 pt-3 pb-1 flex items-center justify-between border-b border-slate-800 bg-slate-850">
-            <span class="text-[11px] font-semibold text-brand-400 flex items-center gap-1">📍 ${bench.city || 'Hrvatska'}</span>
+            <span class="text-[11px] font-semibold text-brand-400 flex items-center gap-1">📍 ${safeCity}</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] font-black" style="color: ${tierColor}; background-color: ${tierColor}20;">
               ${tierDisplay} TIER
             </span>
           </div>
         `}
         <div class="p-3">
-          <h4 class="font-bold text-slate-100 text-sm leading-snug line-clamp-1">${bench.title || 'Klupica'}</h4>
-          <p class="text-xs text-slate-400 mt-1 line-clamp-2">${bench.description || 'Nema opisa.'}</p>
+          <h4 class="font-bold text-slate-100 text-sm leading-snug line-clamp-1">${safeTitle}</h4>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">${safeDesc}</p>
           <div class="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
             <div class="flex items-center gap-1.5">
               <span class="flex items-center gap-1 text-rose-400 font-semibold">
@@ -494,6 +519,11 @@ function renderSidePanelCards() {
     const card = document.createElement('div');
     card.className = 'pt-3 pb-2 flex gap-3 hover:bg-slate-800/60 rounded-xl p-2 cursor-pointer transition-colors group border border-transparent hover:border-slate-800';
     
+    const safeTitle = escapeHtml(bench.title || 'Klupica');
+    const safeCity = escapeHtml(bench.city || 'Hrvatska');
+    const safeDesc = escapeHtml(bench.description || 'Nema dodatnog opisa.');
+    const safeAuthor = escapeHtml(bench.author || 'Korisnik');
+
     const thumbUrl = bench.photos && bench.photos.length > 0 
       ? bench.photos[0].url 
       : null;
@@ -506,7 +536,7 @@ function renderSidePanelCards() {
     if (bench.is_ai) {
       authorBadgeCard = `<span class="inline-flex items-center gap-1 text-[10px] text-purple-400 font-semibold truncate max-w-[100px]" title="AI Baza klupica u RH"><i class="ph-bold ph-sparkle flex-shrink-0"></i> AI Baza</span>`;
     } else if (isVerifiedBench) {
-      authorBadgeCard = `<span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-semibold truncate max-w-[100px]" title="Verificirani autor: ${bench.author || 'Korisnik'}"><i class="ph-bold ph-check-circle flex-shrink-0"></i> <span class="truncate">${bench.author || 'Korisnik'}</span></span>`;
+      authorBadgeCard = `<span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-semibold truncate max-w-[100px]" title="Verificirani autor: ${safeAuthor}"><i class="ph-bold ph-check-circle flex-shrink-0"></i> <span class="truncate">${safeAuthor}</span></span>`;
     } else {
       authorBadgeCard = `<span class="inline-flex items-center gap-1 text-[10px] text-slate-500 font-medium" title="Anonimna objava"><i class="ph-bold ph-mask-happy flex-shrink-0"></i> Anonimno</span>`;
     }
@@ -514,7 +544,7 @@ function renderSidePanelCards() {
     card.innerHTML = `
       <div class="w-20 h-20 sm:w-24 sm:h-24 rounded-lg bg-slate-800 flex-shrink-0 overflow-hidden relative shadow-sm">
         ${thumbUrl ? `
-          <img src="${thumbUrl}" alt="${bench.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+          <img src="${thumbUrl}" alt="${safeTitle}" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.onerror=null; this.src='./img/logo.jpg';">
         ` : `
           <div class="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700/60">
             <i class="ph-bold ph-armchair text-xl text-slate-400"></i>
@@ -525,17 +555,17 @@ function renderSidePanelCards() {
       <div class="flex-1 min-w-0 flex flex-col justify-between">
         <div>
           <div class="flex items-center gap-1.5 text-[11px] font-semibold mb-0.5">
-            <span class="text-brand-400 flex items-center gap-1"><i class="ph-bold ph-map-pin"></i> ${bench.city || 'Hrvatska'}</span>
+            <span class="text-brand-400 flex items-center gap-1"><i class="ph-bold ph-map-pin"></i> ${safeCity}</span>
             <span class="text-slate-600">•</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] font-black" style="color: ${tierColor}; background-color: ${tierColor}18">${tierDisplay} TIER</span>
             <span class="text-slate-600">•</span>
             <span class="text-slate-400 font-normal">${formatCroatianDate(bench.created_at)}</span>
           </div>
           <h4 class="font-bold text-slate-100 text-sm leading-tight truncate group-hover:text-brand-400 transition-colors">
-            ${bench.title || 'Klupica'}
+            ${safeTitle}
           </h4>
           <p class="text-xs text-slate-400 line-clamp-2 mt-1 leading-snug">
-            ${bench.description || 'Nema dodatnog opisa.'}
+            ${safeDesc}
           </p>
         </div>
         <div class="flex items-center justify-between text-xs text-slate-400 pt-1.5 mt-1 border-t border-slate-800/80">
@@ -736,12 +766,14 @@ function renderComments(comments) {
   comments.forEach(comment => {
     const el = document.createElement('div');
     el.className = 'bg-slate-800/60 p-3 rounded-xl border border-slate-700/60 space-y-1';
+    const safeAuthor = escapeHtml(comment.author || 'Anonimni šetač');
+    const safeContent = escapeHtml(comment.content || '');
     el.innerHTML = `
       <div class="flex items-center justify-between text-[11px]">
-        <span class="font-bold text-slate-200">${comment.author || 'Anonimni šetač'}</span>
+        <span class="font-bold text-slate-200">${safeAuthor}</span>
         <span class="text-slate-400">${formatCroatianDate(comment.created_at)}</span>
       </div>
-      <p class="text-xs sm:text-sm text-slate-300">${comment.content}</p>
+      <p class="text-xs sm:text-sm text-slate-300">${safeContent}</p>
     `;
     container.appendChild(el);
   });
@@ -776,6 +808,22 @@ document.getElementById('commentForm').addEventListener('submit', async (e) => {
   const content = contentInput.value.trim();
   if (!content) return;
 
+  // 1. Anti-bot honeypot check
+  if (document.getElementById('commentHoneypot')?.value) {
+    console.warn('Bot detected via comment honeypot.');
+    contentInput.value = '';
+    showToast('Komentar uspješno dodan!');
+    return;
+  }
+
+  // 2. Anti-spam cooldown check (10 sekundi)
+  const now = Date.now();
+  if (now - lastCommentSubmitTimestamp < COMMENT_COOLDOWN_MS) {
+    const remaining = Math.ceil((COMMENT_COOLDOWN_MS - (now - lastCommentSubmitTimestamp)) / 1000);
+    showToast(`Molimo pričekajte još ${remaining}s prije novog komentara.`, 'error');
+    return;
+  }
+
   const authorInput = document.getElementById('commentAuthor')?.value?.trim();
   let author = authorInput;
   if (!author) {
@@ -789,6 +837,7 @@ document.getElementById('commentForm').addEventListener('submit', async (e) => {
 
   try {
     const updatedComments = await BenchAPI.addComment(state.selectedBench.id, author, content, userId);
+    lastCommentSubmitTimestamp = Date.now();
     renderComments(updatedComments);
     contentInput.value = '';
     showToast('Komentar uspješno dodan!');
@@ -994,13 +1043,31 @@ function handleSelectedFiles(files) {
 // Add Bench Form Submission
 document.getElementById('addBenchForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const form = e.target;
   const submitBtn = document.getElementById('submitBenchBtn');
+
+  // 1. Anti-bot honeypot check
+  if (document.getElementById('benchHoneypot')?.value) {
+    console.warn('Bot detected via bench honeypot.');
+    form.reset();
+    closeAddModal();
+    showToast('Klupica uspješno dodana! 🎉');
+    return;
+  }
+
+  // 2. Anti-spam cooldown check (25 sekundi)
+  const now = Date.now();
+  if (now - lastBenchSubmitTimestamp < BENCH_COOLDOWN_MS) {
+    const remaining = Math.ceil((BENCH_COOLDOWN_MS - (now - lastBenchSubmitTimestamp)) / 1000);
+    showToast(`Molimo pričekajte još ${remaining}s prije dodavanja nove klupice.`, 'error');
+    return;
+  }
+
   submitBtn.disabled = true;
   const hasPhotos = state.uploadedFiles.length > 0;
   submitBtn.innerHTML = `<i class="ph-bold ph-spinner animate-spin"></i> ${hasPhotos ? 'Spremanje i upload slika...' : 'Spremanje klupice...'}`;
 
   try {
-    const form = e.target;
     const condition = form.querySelector('input[name="condition"]:checked')?.value || 'A';
     const rawTitle = document.getElementById('benchTitle').value.trim();
     const city = document.getElementById('benchCity').value.trim() || 'Hrvatska';
@@ -1028,6 +1095,7 @@ document.getElementById('addBenchForm').addEventListener('submit', async (e) => 
     };
 
     const createdBench = await BenchAPI.createBench(benchPayload, state.uploadedFiles);
+    lastBenchSubmitTimestamp = Date.now();
     showToast('Klupica uspješno dodana! 🎉');
 
     // Reset Form
@@ -1514,79 +1582,9 @@ document.getElementById('authForm')?.addEventListener('submit', async (e) => {
   }
 });
 
-// Supabase Settings Modal UI
-const supabaseSettingsModal = document.getElementById('supabaseSettingsModal');
-const openSupabaseSettingsBtn = document.getElementById('openSupabaseSettingsBtn');
-const closeSupabaseSettingsBtn = document.getElementById('closeSupabaseSettingsBtn');
-const supabaseSettingsForm = document.getElementById('supabaseSettingsForm');
-
-if (openSupabaseSettingsBtn) {
-  openSupabaseSettingsBtn.addEventListener('click', () => {
-    const config = getEffectiveSupabaseConfig();
-    document.getElementById('inputSupabaseUrl').value = config.url || '';
-    document.getElementById('inputSupabaseKey').value = config.anonKey || '';
-    supabaseSettingsModal.classList.remove('hidden');
-    setTimeout(() => {
-      supabaseSettingsModal.classList.remove('opacity-0');
-      supabaseSettingsModal.querySelector('.transform').classList.remove('scale-95');
-      supabaseSettingsModal.querySelector('.transform').classList.add('scale-100');
-    }, 10);
-  });
-}
-
-if (closeSupabaseSettingsBtn) {
-  closeSupabaseSettingsBtn.addEventListener('click', closeSupabaseModal);
-}
-
-function closeSupabaseModal() {
-  if (!supabaseSettingsModal) return;
-  supabaseSettingsModal.classList.add('opacity-0');
-  supabaseSettingsModal.querySelector('.transform').classList.remove('scale-100');
-  supabaseSettingsModal.querySelector('.transform').classList.add('scale-95');
-  setTimeout(() => {
-    supabaseSettingsModal.classList.add('hidden');
-  }, 200);
-}
-
-if (supabaseSettingsForm) {
-  supabaseSettingsForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const url = document.getElementById('inputSupabaseUrl').value.trim();
-    const key = document.getElementById('inputSupabaseKey').value.trim();
-
-    localStorage.setItem('klupice_supabase_url', url);
-    localStorage.setItem('klupice_supabase_key', key);
-
-    const ok = initSupabase();
-    closeSupabaseModal();
-
-    if (ok) {
-      showToast('Supabase uspješno povezan! 🚀');
-      updateSupabaseBadge(true);
-      loadBenches();
-      BenchAPI.subscribeToChanges(() => loadBenches());
-    } else {
-      showToast('Podaci spremljeni, ali provjerite URL i anon ključ.', 'error');
-    }
-  });
-}
-
-function updateSupabaseBadge(isLive) {
-  const badge = document.getElementById('supabaseStatusBadge');
-  if (!badge) return;
-  if (isLive) {
-    badge.className = 'text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-800 flex items-center gap-1 cursor-pointer';
-    badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Baza: Uživo`;
-  } else {
-    badge.className = 'text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800 flex items-center gap-1 cursor-pointer';
-    badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Poveži Supabase`;
-  }
-}
-
 // App Initialization
 window.addEventListener('DOMContentLoaded', () => {
   const isLive = initSupabase();
-  updateSupabaseBadge(isLive);
 
   initMap();
   loadBenches();

@@ -6,11 +6,11 @@
  */
 
 const SUPABASE_CONFIG = {
-  // 1. Zamijenite s vašim Project URL-om (npr. 'https://xyzcompany.supabase.co')
-  url: '',
+  // 1. Project URL
+  url: 'https://fwzzbtdyaikfyipfgzpy.supabase.co',
 
-  // 2. Zamijenite s vašim anon public API ključem
-  anonKey: '',
+  // 2. Publishable anon public API key
+  anonKey: 'sb_publishable_imMTh90JUyyQyBPX10g5MA_s1bgr1RE',
 
   // Naziv storage bucketa za fotografije (kreira se automatski putem supabase_schema.sql)
   storageBucket: 'bench-photos'

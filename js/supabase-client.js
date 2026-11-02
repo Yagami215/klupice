@@ -20,8 +20,29 @@ function initSupabase() {
   return false;
 }
 
-// Client-side image compression using HTML5 Canvas (reduces 10MB phone photos to ~250KB)
-async function compressImage(file, maxDimension = 1600, quality = 0.82) {
+// Helper: Dohvat klijentske IP adrese (s cacheiranjem radi brzine)
+let cachedClientIp = null;
+async function getClientIp() {
+  if (cachedClientIp) return cachedClientIp;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch('https://api.ipify.org?format=json', { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json();
+      cachedClientIp = data.ip || null;
+      return cachedClientIp;
+    }
+  } catch (e) {
+    // Tihi fallback ako je blokiran
+  }
+  return null;
+}
+
+// Client-side image compression using HTML5 Canvas
+// Smanjuje fotografije od 10-15MB s mobitela na ~120-160KB uz zadržavanje visoke oštrine
+async function compressImage(file, maxDimension = 1400, quality = 0.80) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -302,6 +323,12 @@ const BenchAPI = {
 
       if (benchData.userId) {
         insertRecord.user_id = benchData.userId;
+      } else {
+        // Anonimni unos -> pribavi IP adresu radi sigurnosnog limita (250 unosa po IP)
+        const clientIp = await getClientIp();
+        if (clientIp) {
+          insertRecord.ip_address = clientIp;
+        }
       }
 
       const { data: bench, error: benchErr } = await supabaseClient
@@ -310,7 +337,9 @@ const BenchAPI = {
         .select()
         .single();
 
-      if (benchErr) throw benchErr;
+      if (benchErr) {
+        throw new Error(benchErr.message || 'Greška pri spremanju klupice u bazu.');
+      }
 
       // 2. Compress and upload each photo to Supabase Storage (if any provided)
       const uploadedPhotos = [];
@@ -369,7 +398,7 @@ const BenchAPI = {
     }
   },
 
-  // Like bench
+  // Like bench (Sigurno povećanje samo broja lajkova)
   async likeBench(id, currentLikes) {
     if (typeof id === 'string' && id.startsWith('ai-')) {
       const b = (window.AI_BENCHES || []).find(bench => bench.id === id);
@@ -383,6 +412,22 @@ const BenchAPI = {
       return (b ? b.likes : (currentLikes + 1));
     }
 
+    try {
+      // 1. Primarni sigurni put: RPC funkcija like_bench (ne dozvoljava mijenjanje ostalih polja)
+      const numericId = parseInt(id, 10);
+      if (!isNaN(numericId)) {
+        const { data: updatedLikes, error: rpcErr } = await supabaseClient
+          .rpc('like_bench', { p_bench_id: numericId });
+
+        if (!rpcErr && updatedLikes !== null && updatedLikes !== undefined) {
+          return updatedLikes;
+        }
+      }
+    } catch (e) {
+      // Tihi prijelaz na fallback
+    }
+
+    // 2. Fallback izravni update (ako RPC još nije pokrenut)
     const newLikes = (currentLikes || 0) + 1;
     const { error } = await supabaseClient
       .from('benches')
@@ -557,28 +602,44 @@ const BenchAPI = {
 
     let targetEmail = cleanInput;
 
-    // If identifier is a username (no '@'), look up corresponding email from public.profiles
+    // If identifier is a username (no '@'), look up corresponding email
     if (!isEmail) {
+      let resolvedEmail = null;
+
+      // 1. Primarni sigurni put: RPC funkcija get_email_for_username (štiti e-mailove od javnog skrapiranja)
       try {
-        const { data: profile, error: profileErr } = await supabaseClient
-          .from('profiles')
-          .select('email')
-          .ilike('username', cleanInput)
-          .maybeSingle();
+        const { data: rpcEmail, error: rpcErr } = await supabaseClient
+          .rpc('get_email_for_username', { p_username: cleanInput });
 
-        if (profileErr) {
-          console.warn('Greška pri dohvatu profila:', profileErr);
-          throw new Error('Korisničko ime nije pronađeno. Pokušajte se prijaviti putem e-mail adrese.');
+        if (!rpcErr && rpcEmail) {
+          resolvedEmail = rpcEmail;
         }
-
-        if (!profile || !profile.email) {
-          throw new Error(`Korisničko ime "${cleanInput}" nije pronađeno.`);
-        }
-
-        targetEmail = profile.email;
-      } catch (lookupErr) {
-        throw lookupErr;
+      } catch (e) {
+        // Fallback
       }
+
+      // 2. Fallback: izravan dohvat iz profiles ako RPC još nije pokrenut
+      if (!resolvedEmail) {
+        try {
+          const { data: profile } = await supabaseClient
+            .from('profiles')
+            .select('email')
+            .ilike('username', cleanInput)
+            .maybeSingle();
+
+          if (profile && profile.email) {
+            resolvedEmail = profile.email;
+          }
+        } catch (lookupErr) {
+          // Nastavi na provjeru
+        }
+      }
+
+      if (!resolvedEmail) {
+        throw new Error(`Korisničko ime "${cleanInput}" nije pronađeno. Pokušajte se prijaviti putem e-mail adrese.`);
+      }
+
+      targetEmail = resolvedEmail;
     }
 
     // Authenticate with resolved email and password
