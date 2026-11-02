@@ -621,6 +621,16 @@ function resetFilters() {
   loadBenches();
 }
 
+// Global compatibility aliases (protects against browser caching of older script versions)
+window.openBenchDetail = function(benchId) {
+  openBenchDetailModal(benchId);
+};
+window.renderDetailModal = function(bench) {
+  if (bench && bench.id) {
+    openBenchDetailModal(bench.id);
+  }
+};
+
 // Open Detail Modal for a Bench
 async function openBenchDetailModal(benchId) {
   try {
