@@ -15,7 +15,10 @@ const state = {
   currentGalleryIndex: 0,
   uploadedFiles: [],
   selectedTags: new Set(),
-  currentUser: null
+  currentUser: null,
+  likedBenchIds: new Set(JSON.parse(localStorage.getItem('klupice_liked_benches') || '[]')),
+  editSelectedTags: new Set(),
+  userBenches: []
 };
 
 // Security: XSS Sanitization helper for user-generated inputs
@@ -634,9 +637,60 @@ async function openBenchDetailModal(benchId) {
       document.getElementById('modalAuthor').textContent = `Dodao/la: ${bench.author || 'Anonimni šetač'}`;
     }
     document.getElementById('modalDescription').textContent = bench.description || 'Nema opisa za ovu klupicu.';
-    document.getElementById('modalLikeCount').textContent = bench.likes || 0;
     document.getElementById('modalConditionBadge').innerHTML = getConditionBadge(bench.condition);
     document.getElementById('modalDirectionsLink').href = `https://www.google.com/maps/dir/?api=1&destination=${bench.latitude},${bench.longitude}`;
+
+    // Update Like button style and count (1 lajk po računu / IP adresi)
+    const likeBtn = document.getElementById('modalLikeBtn');
+    if (likeBtn) {
+      const isLiked = state.likedBenchIds.has(bench.id) || 
+                      state.likedBenchIds.has(String(bench.id)) || 
+                      state.likedBenchIds.has(Number(bench.id));
+      if (isLiked) {
+        likeBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-500/70 bg-rose-600/20 text-rose-300 text-sm font-semibold transition-colors shadow-sm';
+        likeBtn.innerHTML = `<i class="ph-fill ph-heart text-base text-rose-400"></i> <span id="modalLikeCount">${bench.likes || 0}</span>`;
+      } else {
+        likeBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-750 text-slate-200 text-sm font-semibold transition-colors shadow-sm';
+        likeBtn.innerHTML = `<i class="ph-bold ph-heart text-base text-rose-400"></i> <span id="modalLikeCount">${bench.likes || 0}</span>`;
+      }
+    }
+
+    // Show "Uredi" button if current logged-in user is the owner of this bench
+    const editBtn = document.getElementById('modalEditBenchBtn');
+    if (editBtn) {
+      const isOwner = Boolean(state.currentUser && bench.user_id && bench.user_id === state.currentUser.id);
+      if (isOwner) {
+        editBtn.classList.remove('hidden');
+        editBtn.classList.add('flex');
+      } else {
+        editBtn.classList.add('hidden');
+        editBtn.classList.remove('flex');
+      }
+    }
+
+    // Async check from database if user already liked this bench (syncs status across sessions)
+    BenchAPI.checkUserLiked(bench.id).then(liked => {
+      if (liked !== undefined && state.selectedBench && state.selectedBench.id === bench.id) {
+        if (liked) {
+          state.likedBenchIds.add(bench.id);
+          state.likedBenchIds.add(String(bench.id));
+        } else {
+          state.likedBenchIds.delete(bench.id);
+          state.likedBenchIds.delete(String(bench.id));
+        }
+        localStorage.setItem('klupice_liked_benches', JSON.stringify([...state.likedBenchIds]));
+        const currentLikeBtn = document.getElementById('modalLikeBtn');
+        if (currentLikeBtn) {
+          if (liked) {
+            currentLikeBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-500/70 bg-rose-600/20 text-rose-300 text-sm font-semibold transition-colors shadow-sm';
+            currentLikeBtn.innerHTML = `<i class="ph-fill ph-heart text-base text-rose-400"></i> <span id="modalLikeCount">${bench.likes || 0}</span>`;
+          } else {
+            currentLikeBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-750 text-slate-200 text-sm font-semibold transition-colors shadow-sm';
+            currentLikeBtn.innerHTML = `<i class="ph-bold ph-heart text-base text-rose-400"></i> <span id="modalLikeCount">${bench.likes || 0}</span>`;
+          }
+        }
+      }
+    }).catch(() => {});
 
     // Tags
     const tagsContainer = document.getElementById('modalTagsContainer');
@@ -779,23 +833,45 @@ function renderComments(comments) {
   });
 }
 
-// Like Button in Modal
+// Like Button in Modal (Toggle: 1 lajk po računu ili IP adresi)
 document.getElementById('modalLikeBtn').addEventListener('click', async () => {
   if (!state.selectedBench) return;
   const benchId = state.selectedBench.id;
 
   try {
-    const newLikes = await BenchAPI.likeBench(benchId, state.selectedBench.likes);
+    const res = await BenchAPI.likeBench(benchId, state.selectedBench.likes);
+    const newLikes = (typeof res === 'object' && res.likes !== undefined) ? res.likes : res;
+    const isLiked = (typeof res === 'object' && res.liked !== undefined) ? res.liked : true;
+
     state.selectedBench.likes = newLikes;
-    document.getElementById('modalLikeCount').textContent = newLikes;
+    const likeCountEl = document.getElementById('modalLikeCount');
+    if (likeCountEl) likeCountEl.textContent = newLikes;
+
+    const likeBtn = document.getElementById('modalLikeBtn');
+    if (isLiked) {
+      state.likedBenchIds.add(benchId);
+      state.likedBenchIds.add(String(benchId));
+      likeBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-500/70 bg-rose-600/20 text-rose-300 text-sm font-semibold transition-colors shadow-sm';
+      likeBtn.innerHTML = `<i class="ph-fill ph-heart text-base text-rose-400"></i> <span id="modalLikeCount">${newLikes}</span>`;
+      showToast('Dodano u favorite! ❤️');
+    } else {
+      state.likedBenchIds.delete(benchId);
+      state.likedBenchIds.delete(String(benchId));
+      state.likedBenchIds.delete(Number(benchId));
+      likeBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-750 text-slate-200 text-sm font-semibold transition-colors shadow-sm';
+      likeBtn.innerHTML = `<i class="ph-bold ph-heart text-base text-rose-400"></i> <span id="modalLikeCount">${newLikes}</span>`;
+      showToast('Uklonjeno iz favorita.');
+    }
+
+    localStorage.setItem('klupice_liked_benches', JSON.stringify([...state.likedBenchIds]));
     
     // Update in local benches array too
-    const found = state.benches.find(b => b.id === benchId);
+    const found = state.benches.find(b => b.id == benchId);
     if (found) found.likes = newLikes;
     renderSidePanelCards();
-    showToast('Hvala na ocjeni! ❤️');
   } catch (err) {
-    console.error(err);
+    console.error('Like error:', err);
+    showToast('Greška pri ocjenjivanju klupice.', 'error');
   }
 });
 
@@ -1580,6 +1656,298 @@ document.getElementById('authForm')?.addEventListener('submit', async (e) => {
     submitBtn.disabled = false;
     submitBtn.innerHTML = originalBtnHtml;
   }
+});
+
+// ====================================================================
+// USER PROFILE & BENCH MANAGEMENT (Uređivanje unesenih klupica)
+// ====================================================================
+
+function openUserProfileModal() {
+  if (!state.currentUser) {
+    openAuthModal('login');
+    return;
+  }
+
+  const modal = document.getElementById('userProfileModal');
+  const username = state.currentUser.user_metadata?.username || state.currentUser.email.split('@')[0];
+  const email = state.currentUser.email || '';
+
+  const userEl = document.getElementById('profileUsername');
+  const emailEl = document.getElementById('profileEmail');
+  if (userEl) userEl.textContent = username;
+  if (emailEl) emailEl.textContent = email;
+
+  modal.classList.remove('hidden');
+  setTimeout(() => {
+    modal.classList.remove('opacity-0');
+    modal.firstElementChild?.classList.remove('scale-95');
+  }, 10);
+
+  loadUserBenches();
+}
+
+function closeUserProfileModal() {
+  const modal = document.getElementById('userProfileModal');
+  if (!modal) return;
+  modal.classList.add('opacity-0');
+  modal.firstElementChild?.classList.add('scale-95');
+  setTimeout(() => {
+    modal.classList.add('hidden');
+  }, 200);
+}
+
+async function loadUserBenches() {
+  if (!state.currentUser) return;
+  const loading = document.getElementById('userBenchesLoading');
+  const emptyState = document.getElementById('userBenchesEmpty');
+  const listContainer = document.getElementById('userBenchesList');
+  const countBadge = document.getElementById('userBenchesCountBadge');
+
+  if (loading) loading.classList.remove('hidden');
+  if (emptyState) emptyState.classList.add('hidden');
+  if (listContainer) listContainer.innerHTML = '';
+
+  try {
+    const benches = await BenchAPI.getUserBenches(state.currentUser.id);
+    state.userBenches = benches || [];
+
+    if (loading) loading.classList.add('hidden');
+    if (countBadge) countBadge.textContent = `${state.userBenches.length} ${state.userBenches.length === 1 ? 'klupica' : 'klupica'}`;
+
+    if (state.userBenches.length === 0) {
+      if (emptyState) emptyState.classList.remove('hidden');
+      return;
+    }
+
+    // Render cards
+    state.userBenches.forEach(bench => {
+      const card = document.createElement('div');
+      card.className = 'flex items-center justify-between p-3 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition gap-3';
+      
+      const thumbUrl = bench.photos && bench.photos[0] ? bench.photos[0].url : null;
+      const thumbHtml = thumbUrl 
+        ? `<img src="${escapeHtml(thumbUrl)}" class="w-14 h-14 rounded-lg object-cover flex-shrink-0 border border-slate-800" alt="">`
+        : `<div class="w-14 h-14 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 flex-shrink-0"><i class="ph-bold ph-armchair text-2xl"></i></div>`;
+
+      card.innerHTML = `
+        <div class="flex items-center gap-3 min-w-0">
+          ${thumbHtml}
+          <div class="min-w-0">
+            <h4 class="font-bold text-white text-xs sm:text-sm truncate">${escapeHtml(bench.title || 'Klupica')}</h4>
+            <div class="flex items-center gap-2 mt-1 text-[11px] text-slate-400 flex-wrap">
+              <span class="flex items-center gap-0.5 text-slate-300">
+                <i class="ph-bold ph-map-pin text-brand-400"></i> ${escapeHtml(bench.city || 'Hrvatska')}
+              </span>
+              <span>•</span>
+              <span class="flex items-center gap-1 text-rose-400 font-medium">
+                <i class="ph-fill ph-heart"></i> ${bench.likes || 0}
+              </span>
+              <span>•</span>
+              ${getConditionBadge(bench.condition)}
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5 flex-shrink-0">
+          <button 
+            type="button" 
+            class="view-bench-from-profile px-2.5 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition border border-slate-700 flex items-center gap-1 cursor-pointer"
+            title="Prikaži na karti"
+          >
+            <i class="ph-bold ph-map-trifold"></i>
+            <span class="hidden sm:inline">Prikaži</span>
+          </button>
+          <button 
+            type="button" 
+            class="edit-bench-from-profile px-2.5 py-1.5 text-xs font-semibold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition border border-amber-500/30 flex items-center gap-1 cursor-pointer"
+            title="Uredi podatke o klupici"
+          >
+            <i class="ph-bold ph-pencil-simple"></i>
+            <span>Uredi</span>
+          </button>
+        </div>
+      `;
+
+      // Wire view button
+      card.querySelector('.view-bench-from-profile')?.addEventListener('click', () => {
+        closeUserProfileModal();
+        if (map && bench.latitude && bench.longitude) {
+          map.setView([bench.latitude, bench.longitude], 16, { animate: true });
+        }
+        openBenchDetail(bench.id);
+      });
+
+      // Wire edit button
+      card.querySelector('.edit-bench-from-profile')?.addEventListener('click', () => {
+        openEditBenchModal(bench);
+      });
+
+      listContainer.appendChild(card);
+    });
+
+  } catch (err) {
+    if (loading) loading.classList.add('hidden');
+    console.error('Greška pri učitavanju korisničkih klupica:', err);
+    showToast('Greška pri dohvaćanju vaših klupica.', 'error');
+  }
+}
+
+// EDIT BENCH MODAL LOGIC
+function openEditBenchModal(bench) {
+  if (!bench) return;
+
+  const benchIdInput = document.getElementById('editBenchId');
+  const titleInput = document.getElementById('editBenchTitle');
+  const cityInput = document.getElementById('editBenchCity');
+  const descInput = document.getElementById('editBenchDescription');
+
+  if (benchIdInput) benchIdInput.value = bench.id;
+  if (titleInput) titleInput.value = bench.title || '';
+  if (cityInput) cityInput.value = bench.city || '';
+  if (descInput) descInput.value = bench.description || '';
+
+  // Select matching radio
+  const radios = document.querySelectorAll('input[name="editCondition"]');
+  radios.forEach(r => {
+    r.checked = (r.value === bench.condition);
+  });
+
+  // Populate tags
+  state.editSelectedTags = new Set(bench.tags || []);
+  updateEditTagsUI();
+
+  // Hide alert
+  const alertEl = document.getElementById('editBenchAlert');
+  if (alertEl) {
+    alertEl.className = 'hidden';
+    alertEl.textContent = '';
+  }
+
+  // Open modal
+  const modal = document.getElementById('editBenchModal');
+  if (modal) {
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+      modal.classList.remove('opacity-0');
+      modal.firstElementChild?.classList.remove('scale-95');
+    }, 10);
+  }
+}
+
+function closeEditBenchModal() {
+  const modal = document.getElementById('editBenchModal');
+  if (!modal) return;
+  modal.classList.add('opacity-0');
+  modal.firstElementChild?.classList.add('scale-95');
+  setTimeout(() => {
+    modal.classList.add('hidden');
+  }, 200);
+}
+
+function updateEditTagsUI() {
+  document.querySelectorAll('.edit-tag-btn').forEach(btn => {
+    const tag = btn.getAttribute('data-tag');
+    if (state.editSelectedTags.has(tag)) {
+      btn.className = 'edit-tag-btn px-2.5 py-1 text-xs rounded-full border border-brand-500 bg-brand-950 text-brand-300 font-semibold shadow-sm transition-all cursor-pointer';
+    } else {
+      btn.className = 'edit-tag-btn px-2.5 py-1 text-xs rounded-full border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all cursor-pointer';
+    }
+  });
+}
+
+// Wire edit tag buttons
+document.querySelectorAll('.edit-tag-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tag = btn.getAttribute('data-tag');
+    if (state.editSelectedTags.has(tag)) {
+      state.editSelectedTags.delete(tag);
+    } else {
+      state.editSelectedTags.add(tag);
+    }
+    updateEditTagsUI();
+  });
+});
+
+// Edit Bench Form Submit
+document.getElementById('editBenchForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const benchId = document.getElementById('editBenchId').value;
+  const title = document.getElementById('editBenchTitle').value.trim();
+  const city = document.getElementById('editBenchCity').value.trim();
+  const condition = document.querySelector('input[name="editCondition"]:checked')?.value || 'B';
+  const description = document.getElementById('editBenchDescription').value.trim();
+  const tags = Array.from(state.editSelectedTags);
+
+  const saveBtn = document.getElementById('saveEditBenchBtn');
+  const originalHtml = saveBtn ? saveBtn.innerHTML : '';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="ph-bold ph-spinner animate-spin"></i> <span>Spremanje...</span>';
+  }
+
+  try {
+    const updatedBench = await BenchAPI.updateBench(benchId, {
+      title,
+      city,
+      condition,
+      description,
+      tags
+    });
+
+    // Update in state.benches
+    const idx = state.benches.findIndex(b => b.id == benchId);
+    if (idx !== -1) {
+      state.benches[idx] = { ...state.benches[idx], ...updatedBench, title, city, condition, description, tags };
+    }
+
+    // Update in state.selectedBench if currently open
+    if (state.selectedBench && state.selectedBench.id == benchId) {
+      state.selectedBench = { ...state.selectedBench, ...updatedBench, title, city, condition, description, tags };
+      renderDetailModal(state.selectedBench);
+    }
+
+    // Refresh UI
+    renderMarkers();
+    renderSidePanelCards();
+
+    // Refresh User Profile list if open
+    loadUserBenches();
+
+    closeEditBenchModal();
+    showToast('Klupica je uspješno ažurirana! ✨');
+  } catch (err) {
+    console.error('Greška pri spremanju izmjena klupice:', err);
+    const alertEl = document.getElementById('editBenchAlert');
+    if (alertEl) {
+      alertEl.className = 'p-3 rounded-lg text-xs font-medium border bg-rose-950/70 text-rose-300 border-rose-800 block';
+      alertEl.textContent = 'Došlo je do greške: ' + (err.message || 'Provjerite internetsku vezu i pokušajte ponovno.');
+    }
+    showToast('Greška pri spremanju izmjena.', 'error');
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = originalHtml;
+    }
+  }
+});
+
+// Event listeners for profile and edit modal triggers
+document.getElementById('openProfileBtn')?.addEventListener('click', openUserProfileModal);
+document.getElementById('closeUserProfileBtn')?.addEventListener('click', closeUserProfileModal);
+document.getElementById('userProfileModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'userProfileModal') closeUserProfileModal();
+});
+document.getElementById('profileAddBenchCTA')?.addEventListener('click', () => {
+  closeUserProfileModal();
+  document.getElementById('openAddBenchBtn')?.click();
+});
+
+document.getElementById('modalEditBenchBtn')?.addEventListener('click', () => {
+  if (state.selectedBench) openEditBenchModal(state.selectedBench);
+});
+document.getElementById('closeEditBenchBtn')?.addEventListener('click', closeEditBenchModal);
+document.getElementById('cancelEditBtn')?.addEventListener('click', closeEditBenchModal);
+document.getElementById('editBenchModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'editBenchModal') closeEditBenchModal();
 });
 
 // App Initialization

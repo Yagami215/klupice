@@ -398,44 +398,195 @@ const BenchAPI = {
     }
   },
 
-  // Like bench (Sigurno povećanje samo broja lajkova)
-  async likeBench(id, currentLikes) {
+  // Like bench (Toggle: 1 lajk po računu ili IP adresi)
+  async likeBench(id, currentLikes = 0) {
     if (typeof id === 'string' && id.startsWith('ai-')) {
+      const localLikes = new Set(JSON.parse(localStorage.getItem('klupice_liked_benches') || '[]'));
+      const isLiked = localLikes.has(id);
       const b = (window.AI_BENCHES || []).find(bench => bench.id === id);
-      if (b) b.likes = (b.likes || 0) + 1;
-      return (b ? b.likes : (currentLikes + 1));
+      let newLikes = currentLikes;
+      let newLikedStatus = !isLiked;
+
+      if (isLiked) {
+        localLikes.delete(id);
+        newLikes = Math.max(0, (currentLikes || 1) - 1);
+      } else {
+        localLikes.add(id);
+        newLikes = (currentLikes || 0) + 1;
+      }
+      if (b) b.likes = newLikes;
+      localStorage.setItem('klupice_liked_benches', JSON.stringify([...localLikes]));
+      return { liked: newLikedStatus, likes: newLikes };
+    }
+
+    // Anonimni klijentski token kao fallback identifikator
+    let clientToken = localStorage.getItem('klupice_client_anon_token');
+    if (!clientToken) {
+      clientToken = 'anon_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+      localStorage.setItem('klupice_client_anon_token', clientToken);
     }
 
     if (!supabaseClient) {
+      const localLikes = new Set(JSON.parse(localStorage.getItem('klupice_liked_benches') || '[]'));
+      const isLiked = localLikes.has(id) || localLikes.has(String(id));
       const b = localBenchesState.find(bench => bench.id == id);
-      if (b) b.likes = (b.likes || 0) + 1;
-      return (b ? b.likes : (currentLikes + 1));
+      let newLikes = currentLikes;
+      let newLikedStatus = !isLiked;
+
+      if (isLiked) {
+        localLikes.delete(id);
+        localLikes.delete(String(id));
+        newLikes = Math.max(0, (currentLikes || 1) - 1);
+      } else {
+        localLikes.add(id);
+        newLikes = (currentLikes || 0) + 1;
+      }
+      if (b) b.likes = newLikes;
+      localStorage.setItem('klupice_liked_benches', JSON.stringify([...localLikes]));
+      return { liked: newLikedStatus, likes: newLikes };
     }
 
     try {
-      // 1. Primarni sigurni put: RPC funkcija like_bench (ne dozvoljava mijenjanje ostalih polja)
+      // 1. Primarni sigurni put: RPC funkcija like_bench (strogo 1 lajk po računu / IP adresi)
       const numericId = parseInt(id, 10);
       if (!isNaN(numericId)) {
-        const { data: updatedLikes, error: rpcErr } = await supabaseClient
-          .rpc('like_bench', { p_bench_id: numericId });
+        const { data: rpcRes, error: rpcErr } = await supabaseClient
+          .rpc('like_bench', { p_bench_id: numericId, p_client_ip: clientToken });
 
-        if (!rpcErr && updatedLikes !== null && updatedLikes !== undefined) {
-          return updatedLikes;
+        if (!rpcErr && rpcRes) {
+          // Ako je vraćen JSONB objekt { liked, likes }
+          if (typeof rpcRes === 'object' && rpcRes.likes !== undefined) {
+            return {
+              liked: Boolean(rpcRes.liked),
+              likes: Number(rpcRes.likes)
+            };
+          }
+          // Ako je stara funkcija vratila samo INTEGER
+          if (typeof rpcRes === 'number') {
+            return { liked: true, likes: rpcRes };
+          }
         }
       }
     } catch (e) {
-      // Tihi prijelaz na fallback
+      console.warn('RPC like_bench notice:', e);
     }
 
-    // 2. Fallback izravni update (ako RPC još nije pokrenut)
-    const newLikes = (currentLikes || 0) + 1;
+    // 2. Fallback izravni update (ako RPC još nije ažuriran)
+    const localLikes = new Set(JSON.parse(localStorage.getItem('klupice_liked_benches') || '[]'));
+    const isLiked = localLikes.has(id) || localLikes.has(String(id));
+    let newLikes = isLiked ? Math.max(0, (currentLikes || 1) - 1) : (currentLikes || 0) + 1;
+    let newLikedStatus = !isLiked;
+
     const { error } = await supabaseClient
       .from('benches')
       .update({ likes: newLikes })
       .eq('id', id);
 
     if (error) throw error;
-    return newLikes;
+    return { liked: newLikedStatus, likes: newLikes };
+  },
+
+  // Provjera je li klupica već lajkana od strane korisnika / preglednika
+  async checkUserLiked(benchId) {
+    try {
+      const localLikes = JSON.parse(localStorage.getItem('klupice_liked_benches') || '[]');
+      if (localLikes.includes(benchId) || localLikes.includes(String(benchId)) || localLikes.includes(Number(benchId))) {
+        return true;
+      }
+    } catch (e) {}
+
+    if (!supabaseClient) return false;
+
+    try {
+      const numericId = parseInt(benchId, 10);
+      if (!isNaN(numericId)) {
+        const clientToken = localStorage.getItem('klupice_client_anon_token') || '';
+        const { data: isLiked, error } = await supabaseClient
+          .rpc('check_user_liked', { p_bench_id: numericId, p_client_ip: clientToken });
+        if (!error && typeof isLiked === 'boolean') {
+          return isLiked;
+        }
+      }
+    } catch (e) {}
+
+    return false;
+  },
+
+  // Dohvat svih klupica koje je unio prijavljeni korisnik (za Profil)
+  async getUserBenches(userId) {
+    if (!userId) return [];
+
+    if (!supabaseClient) {
+      return localBenchesState.filter(b => b.user_id === userId);
+    }
+
+    try {
+      const { data, error } = await supabaseClient
+        .from('benches')
+        .select(`
+          *,
+          photos:bench_photos(id, url, created_at),
+          comments:bench_comments(id, author, content, created_at)
+        `)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return data || [];
+    } catch (err) {
+      console.error('Greška pri dohvatu korisničkih klupica:', err);
+      return localBenchesState.filter(b => b.user_id === userId);
+    }
+  },
+
+  // Ažuriranje postojeće klupice (dozvoljeno isključivo vlasniku putem RLS-a)
+  async updateBench(benchId, updateData) {
+    const rawTitle = updateData.title ? updateData.title.trim() : '';
+    const city = updateData.city ? updateData.city.trim() : 'Hrvatska';
+    const title = rawTitle || (city !== 'Hrvatska' ? `Klupica (${city})` : 'Klupica');
+    const condition = updateData.condition || 'B';
+    const description = updateData.description !== undefined ? updateData.description.trim() : '';
+    const tags = Array.isArray(updateData.tags) ? updateData.tags : [];
+
+    if (!supabaseClient) {
+      const bench = localBenchesState.find(b => b.id == benchId);
+      if (bench) {
+        bench.title = title;
+        bench.city = city;
+        bench.condition = condition;
+        bench.description = description;
+        bench.tags = tags;
+        return bench;
+      }
+      throw new Error('Klupica nije pronađena u memoriji.');
+    }
+
+    try {
+      const updatePayload = {
+        title: title,
+        city: city,
+        condition: condition,
+        description: description,
+        tags: tags
+      };
+
+      const { data, error } = await supabaseClient
+        .from('benches')
+        .update(updatePayload)
+        .eq('id', benchId)
+        .select(`
+          *,
+          photos:bench_photos(id, url, created_at),
+          comments:bench_comments(id, author, content, created_at)
+        `)
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      console.error('Greška pri ažuriranju klupice u Supabase:', err);
+      throw err;
+    }
   },
 
   // Add comment

@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 5. Tablica za praćenje lajkova (1 lajk po računu ili IP adresi)
+CREATE TABLE IF NOT EXISTS public.bench_likes (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    bench_id BIGINT NOT NULL REFERENCES public.benches(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    ip_hash TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indeksi za brže pretraživanje
 CREATE INDEX IF NOT EXISTS idx_benches_coords ON public.benches(latitude, longitude);
 CREATE INDEX IF NOT EXISTS idx_benches_city ON public.benches(city);
@@ -59,6 +68,18 @@ CREATE INDEX IF NOT EXISTS idx_bench_comments_bench ON public.bench_comments(ben
 CREATE INDEX IF NOT EXISTS idx_bench_comments_user_id ON public.bench_comments(user_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
 CREATE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles(lower(username));
+CREATE INDEX IF NOT EXISTS idx_bench_likes_bench_id ON public.bench_likes(bench_id);
+
+-- Unikatni indeksi za lajkove:
+-- 1 lajk po registriranom računu za svaku klupicu
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_bench_user_like 
+ON public.bench_likes(bench_id, user_id) 
+WHERE user_id IS NOT NULL;
+
+-- 1 lajk po IP adresi za anonimne korisnike za svaku klupicu
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_bench_ip_like 
+ON public.bench_likes(bench_id, ip_hash) 
+WHERE user_id IS NULL AND ip_hash IS NOT NULL;
 
 -- ====================================================================
 -- SIGURNOSNA OGRANIČENJA: Max 500 klupica po računu, Max 250 po IP adresi (anonimno)
@@ -126,36 +147,59 @@ ALTER TABLE public.benches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bench_photos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bench_comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bench_likes ENABLE ROW LEVEL SECURITY;
 
 -- Politike za tablicu benches
+DROP POLICY IF EXISTS "Svatko može pregledavati klupice" ON public.benches;
 CREATE POLICY "Svatko može pregledavati klupice" 
 ON public.benches FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Svatko može dodati klupicu" ON public.benches;
 CREATE POLICY "Svatko može dodati klupicu" 
 ON public.benches FOR INSERT WITH CHECK (true);
 
--- Sigurno ažuriranje: samo vlasnik može uređivati svoju klupicu (lajkanje ide preko funkcije like_bench)
+-- Sigurno ažuriranje: samo prijavljeni vlasnik može uređivati svoju klupicu
+DROP POLICY IF EXISTS "Vlasnik može uređivati svoju klupicu" ON public.benches;
 CREATE POLICY "Vlasnik može uređivati svoju klupicu" 
-ON public.benches FOR UPDATE USING (auth.uid() = user_id);
+ON public.benches FOR UPDATE 
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+
+-- Sigurno brisanje: samo prijavljeni vlasnik može obrisati svoju klupicu
+DROP POLICY IF EXISTS "Vlasnik može obrisati svoju klupicu" ON public.benches;
+CREATE POLICY "Vlasnik može obrisati svoju klupicu" 
+ON public.benches FOR DELETE 
+USING (auth.uid() = user_id);
 
 -- Politike za tablicu bench_photos
+DROP POLICY IF EXISTS "Svatko može pregledavati slike" ON public.bench_photos;
 CREATE POLICY "Svatko može pregledavati slike" 
 ON public.bench_photos FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Svatko može dodati sliku klupice" ON public.bench_photos;
 CREATE POLICY "Svatko može dodati sliku klupice" 
 ON public.bench_photos FOR INSERT WITH CHECK (true);
 
 -- Politike za tablicu bench_comments
+DROP POLICY IF EXISTS "Svatko može čitati komentare" ON public.bench_comments;
 CREATE POLICY "Svatko može čitati komentare" 
 ON public.bench_comments FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Svatko može ostaviti komentar" ON public.bench_comments;
 CREATE POLICY "Svatko može ostaviti komentar" 
 ON public.bench_comments FOR INSERT WITH CHECK (true);
 
+-- Politike za tablicu bench_likes
+DROP POLICY IF EXISTS "Svatko može vidjeti lajkove" ON public.bench_likes;
+CREATE POLICY "Svatko može vidjeti lajkove" 
+ON public.bench_likes FOR SELECT USING (true);
+
 -- Politike za tablicu profiles (zaštita privatnosti korisnika: korisnik vidi samo svoj profil)
+DROP POLICY IF EXISTS "Korisnik može čitati svoj profil" ON public.profiles;
 CREATE POLICY "Korisnik može čitati svoj profil" 
 ON public.profiles FOR SELECT USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Korisnik može uređivati svoj profil" ON public.profiles;
 CREATE POLICY "Korisnik može uređivati svoj profil" 
 ON public.profiles FOR ALL USING (auth.uid() = id);
 
@@ -163,22 +207,115 @@ ON public.profiles FOR ALL USING (auth.uid() = id);
 -- SIGURNE FUNKCIJE (RPC)
 -- ====================================================================
 
--- 1. Sigurna funkcija za lajkanje klupice (onemogućuje neovlašteno mijenjanje koordinata/naziva)
-CREATE OR REPLACE FUNCTION public.like_bench(p_bench_id BIGINT)
-RETURNS INTEGER AS $$
-DECLARE
-    v_likes INTEGER;
-BEGIN
-    UPDATE public.benches
-    SET likes = COALESCE(likes, 0) + 1
-    WHERE id = p_bench_id
-    RETURNING likes INTO v_likes;
+-- Uklanjamo stare definicije funkcije like_bench radi promjene potpisa/povratnog tipa
+DROP FUNCTION IF EXISTS public.like_bench(BIGINT);
+DROP FUNCTION IF EXISTS public.like_bench(BIGINT, TEXT);
 
-    RETURN v_likes;
+-- 1. Sigurna funkcija za lajkanje klupice (strogo 1 lajk po računu ili IP adresi - toggle like/unlike)
+CREATE OR REPLACE FUNCTION public.like_bench(p_bench_id BIGINT, p_client_ip TEXT DEFAULT NULL)
+RETURNS JSONB AS $$
+DECLARE
+    v_user_id UUID;
+    v_ip TEXT;
+    v_ip_hash TEXT;
+    v_liked BOOLEAN;
+    v_likes_count INTEGER;
+BEGIN
+    v_user_id := auth.uid();
+
+    IF v_user_id IS NOT NULL THEN
+        -- 1. Prijavljeni korisnik (1 lajk po računu)
+        IF EXISTS (SELECT 1 FROM public.bench_likes WHERE bench_id = p_bench_id AND user_id = v_user_id) THEN
+            -- Ako je već lajkao -> ukloni lajk (Unlike)
+            DELETE FROM public.bench_likes WHERE bench_id = p_bench_id AND user_id = v_user_id;
+            v_liked := false;
+        ELSE
+            -- Ako nije lajkao -> dodaj lajk
+            INSERT INTO public.bench_likes (bench_id, user_id) VALUES (p_bench_id, v_user_id);
+            v_liked := true;
+        END IF;
+    ELSE
+        -- 2. Anonimni korisnik (1 lajk po IP adresi s MD5 heširanjem)
+        BEGIN
+            v_ip := current_setting('request.headers', true)::json->>'cf-connecting-ip';
+            IF v_ip IS NULL OR v_ip = '' THEN
+                v_ip := split_part(current_setting('request.headers', true)::json->>'x-forwarded-for', ',', 1);
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            v_ip := NULL;
+        END;
+
+        IF v_ip IS NULL OR v_ip = '' THEN
+            v_ip := p_client_ip;
+        END IF;
+
+        IF v_ip IS NULL OR v_ip = '' THEN
+            v_ip := 'anon_client';
+        END IF;
+
+        v_ip_hash := md5(trim(v_ip) || '_klupice_like_salt_2026');
+
+        IF EXISTS (SELECT 1 FROM public.bench_likes WHERE bench_id = p_bench_id AND user_id IS NULL AND ip_hash = v_ip_hash) THEN
+            -- Već lajkao s ove IP adrese -> ukloni lajk
+            DELETE FROM public.bench_likes WHERE bench_id = p_bench_id AND user_id IS NULL AND ip_hash = v_ip_hash;
+            v_liked := false;
+        ELSE
+            -- Novi lajk s ove IP adrese
+            INSERT INTO public.bench_likes (bench_id, ip_hash) VALUES (p_bench_id, v_ip_hash);
+            v_liked := true;
+        END IF;
+    END IF;
+
+    -- Izračunaj stvarni broj lajkova iz tablice bench_likes
+    SELECT COUNT(*) INTO v_likes_count FROM public.bench_likes WHERE bench_id = p_bench_id;
+
+    -- Ažuriraj agregirani broj u tablici benches
+    UPDATE public.benches
+    SET likes = v_likes_count
+    WHERE id = p_bench_id;
+
+    RETURN jsonb_build_object('liked', v_liked, 'likes', v_likes_count);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-GRANT EXECUTE ON FUNCTION public.like_bench(BIGINT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.like_bench(BIGINT, TEXT) TO anon, authenticated;
+
+-- Provjera je li korisnik / IP adresa već lajkala klupicu
+CREATE OR REPLACE FUNCTION public.check_user_liked(p_bench_id BIGINT, p_client_ip TEXT DEFAULT NULL)
+RETURNS BOOLEAN AS $$
+DECLARE
+    v_user_id UUID;
+    v_ip TEXT;
+    v_ip_hash TEXT;
+BEGIN
+    v_user_id := auth.uid();
+    IF v_user_id IS NOT NULL THEN
+        RETURN EXISTS (SELECT 1 FROM public.bench_likes WHERE bench_id = p_bench_id AND user_id = v_user_id);
+    END IF;
+
+    BEGIN
+        v_ip := current_setting('request.headers', true)::json->>'cf-connecting-ip';
+        IF v_ip IS NULL OR v_ip = '' THEN
+            v_ip := split_part(current_setting('request.headers', true)::json->>'x-forwarded-for', ',', 1);
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        v_ip := NULL;
+    END;
+
+    IF v_ip IS NULL OR v_ip = '' THEN
+        v_ip := p_client_ip;
+    END IF;
+
+    IF v_ip IS NULL OR v_ip = '' THEN
+        RETURN false;
+    END IF;
+
+    v_ip_hash := md5(trim(v_ip) || '_klupice_like_salt_2026');
+    RETURN EXISTS (SELECT 1 FROM public.bench_likes WHERE bench_id = p_bench_id AND user_id IS NULL AND ip_hash = v_ip_hash);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+GRANT EXECUTE ON FUNCTION public.check_user_liked(BIGINT, TEXT) TO anon, authenticated;
 
 -- 2. Sigurna funkcija za dohvat e-maila pri prijavi putem korisničkog imena (štiti sve e-mailove od javnog skrapiranja)
 CREATE OR REPLACE FUNCTION public.get_email_for_username(p_username TEXT)
