@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="hr" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Klupice Online - Karta klupica u Hrvatskoj</title>
+  <meta name="description" content="Pronađite, podijelite i ocijenite najbolje klupice za odmor diljem Hrvatske. Dodajte fotografije, opise i lokacije.">
+  
+  <!-- Favicon & App Icons -->
+  <link rel="icon" type="image/png" sizes="32x32" href="./favicon.png">
+  <link rel="icon" type="image/x-icon" href="./favicon.ico">
+  <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+              800: '#065f46',
+              900: '#064e3b'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- Leaflet MarkerCluster CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <!-- Phosphor Icons CDN for clean UI icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <!-- Supabase JS Client v2 CDN -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased overflow-hidden h-screen flex flex-col">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-slate-900/95 backdrop-blur-md border-b border-slate-800 z-30 px-4 py-2.5 flex items-center justify-between shadow-sm flex-shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden shadow-sm border border-slate-700 flex-shrink-0">
+        <img src="./img/logo.jpg" alt="Klupice Online" class="w-full h-full object-cover">
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-xl font-bold tracking-tight text-white leading-tight">Klupice <span class="text-brand-500">Online</span></h1>
+          <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-brand-950 text-brand-300 border border-brand-800">Hrvatska 🇭🇷</span>
+          
+          <!-- Supabase Status & Setup Badge -->
+          <div id="openSupabaseSettingsBtn" title="Postavke baze podataka">
+            <span id="supabaseStatusBadge" class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800/80 flex items-center gap-1 cursor-pointer hover:opacity-80 transition-opacity">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Poveži Supabase
+            </span>
+          </div>
+        </div>
+        <p class="text-xs text-slate-400 hidden sm:block">Zajednička karta i vodič za najljepše klupice za odmor</p>
+      </div>
+    </div>
+
+    <!-- Quick Stats & Actions -->
+    <div class="flex items-center gap-2 sm:gap-3">
+      <!-- Search Input for desktop -->
+      <div class="relative hidden md:block w-60">
+        <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-base"></i>
+        <input 
+          type="text" 
+          id="globalSearchInput" 
+          placeholder="Pretraži grad, naziv..." 
+          class="w-full pl-9 pr-4 py-1.5 text-sm rounded-full border border-slate-700 bg-slate-800 text-slate-100 placeholder-slate-400 focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all"
+        >
+      </div>
+
+      <!-- Geolocation Button -->
+      <button 
+        id="locateMeBtn" 
+        title="Moja lokacija" 
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700"
+      >
+        <i class="ph-bold ph-navigation-arrow text-brand-400 text-base"></i>
+        <span class="hidden sm:inline">Moja lokacija</span>
+      </button>
+
+      <!-- Sidebar Toggle Button -->
+      <button 
+        id="sidebarToggleBtn" 
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700"
+        title="Popis klupica"
+      >
+        <i class="ph-bold ph-list-dashes text-slate-300 text-base"></i>
+        <span class="hidden sm:inline">Popis (<span id="benchCountBadge">0</span>)</span>
+      </button>
+
+      <!-- Account Auth Button / User Menu -->
+      <button 
+        id="authLoginBtn" 
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700" 
+        title="Prijava ili Registracija"
+      >
+        <i class="ph-bold ph-user text-brand-400 text-base"></i>
+        <span class="hidden sm:inline">Prijava</span>
+      </button>
+
+      <!-- Logged In User Indicator & Menu -->
+      <div id="authUserMenu" class="hidden items-center gap-1.5">
+        <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200" title="Prijavljeni korisnik">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <i class="ph-bold ph-user-circle text-brand-400 text-sm"></i>
+          <span id="authUsernameDisplay" class="font-bold max-w-[100px] truncate text-slate-100">Korisnik</span>
+        </div>
+        <button 
+          id="authLogoutBtn" 
+          class="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors border border-slate-700" 
+          title="Odjavi se"
+        >
+          <i class="ph-bold ph-sign-out text-base"></i>
+        </button>
+      </div>
+
+      <!-- Add Bench CTA -->
+      <button 
+        id="openAddBenchBtn" 
+        class="flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-brand-600 hover:bg-brand-500 active:scale-95 rounded-lg transition-all shadow-md shadow-brand-600/30"
+      >
+        <i class="ph-bold ph-plus-circle text-base sm:text-lg"></i>
+        <span>Dodaj klupicu</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Filter Bar (City & Tags) -->
+  <div class="bg-slate-900 border-b border-slate-800 px-4 py-2 z-20 flex items-center gap-2 overflow-x-auto scrollbar-none shadow-sm flex-shrink-0">
+    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1 pl-1 pr-2 border-r border-slate-800 flex-shrink-0">
+      <i class="ph ph-map-pin"></i> Gradovi
+    </div>
+    <div class="flex items-center gap-1.5 flex-nowrap" id="cityFilterContainer">
+      <button class="city-filter active px-3 py-1 rounded-full text-xs font-medium bg-brand-600 text-white shadow-sm border border-brand-500 transition-all" data-city="sve">Svi gradovi</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Zagreb">Zagreb</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Split">Split</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Rijeka">Rijeka</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Zadar">Zadar</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Osijek">Osijek</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Dubrovnik">Dubrovnik</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Opatija">Opatija</button>
+      <button class="city-filter px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-city="Rovinj">Rovinj</button>
+    </div>
+
+    <div class="h-4 w-px bg-slate-800 mx-1 flex-shrink-0 hidden"></div>
+  </div>
+
+  <!-- Main Content Area: Map + Side Drawer -->
+  <div class="relative flex-1 w-full h-full overflow-hidden flex">
+    
+    <!-- Map Container -->
+    <div id="map" class="w-full h-full z-10"></div>
+
+    <!-- Floating Map Controls / Help Banner -->
+    <div class="absolute top-4 left-4 z-20 pointer-events-none hidden sm:block">
+      <div class="bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl shadow-lg border border-slate-800 text-xs text-slate-300 flex items-center gap-2 pointer-events-auto">
+        <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-brand-950 text-brand-400 font-bold text-xs border border-brand-800">💡</span>
+        <span>Kliknite bilo gdje na kartu za brzi unos nove klupice!</span>
+      </div>
+    </div>
+
+    <!-- Map Layer Switcher (Top Right) -->
+    <div class="absolute top-4 right-4 z-20 flex flex-col gap-2">
+      <div class="bg-slate-900/90 backdrop-blur-md rounded-xl shadow-lg border border-slate-800 p-1 flex items-center gap-1">
+        <button id="layerSatellite" class="px-2.5 py-1 text-xs font-medium rounded-lg bg-brand-600 text-white transition-all shadow-sm" title="Satelitski prikaz (Esri)">Satelit</button>
+        <button id="layerTopo" class="px-2.5 py-1 text-xs font-medium rounded-lg text-slate-300 hover:bg-slate-800 transition-all" title="Topografska karta (OpenTopoMap)">Reljef</button>
+      </div>
+    </div>
+
+    <!-- Side Panel / Drawer for Bench List -->
+    <aside 
+      id="sidePanel" 
+      class="absolute top-0 right-0 h-full w-full sm:w-96 md:w-[420px] bg-slate-900 border-l border-slate-800 shadow-2xl z-30 transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col"
+    >
+      <!-- Panel Header -->
+      <div class="px-4 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+        <div>
+          <h2 class="font-bold text-white text-base flex items-center gap-2">
+            <i class="ph-bold ph-armchair text-brand-500 text-lg"></i>
+            <span>Klupice u Hrvatskoj</span>
+          </h2>
+          <p class="text-xs text-slate-400">Prikazano: <span id="panelBenchCount">0</span> lokacija</p>
+        </div>
+        <button id="closeSidePanelBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+          <i class="ph-bold ph-x text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Search & Filters in Side Panel -->
+      <div class="p-3 border-b border-slate-800 bg-slate-900 space-y-3 flex-shrink-0">
+        <!-- Search Input -->
+        <div class="relative">
+          <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-slate-400"></i>
+          <input 
+            type="text" 
+            id="panelSearchInput" 
+            placeholder="Traži po nazivu, gradu, autoru..." 
+            class="w-full pl-9 pr-4 py-1.5 text-xs sm:text-sm rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all"
+          >
+        </div>
+
+        <!-- Uploader Filter (Sve / Verificirani / Anonimno) -->
+        <div class="space-y-1.5">
+          <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span class="flex items-center gap-1"><i class="ph-bold ph-user-check text-brand-400"></i> Autor objave</span>
+            <button type="button" id="activeFilterResetBtn" class="hidden text-[10px] text-brand-400 hover:underline cursor-pointer normal-case">Poništi filtere</button>
+          </div>
+          <div class="grid grid-cols-4 gap-1.5" id="uploaderFilterContainer">
+            <button type="button" class="uploader-filter active py-1.5 px-1.5 rounded-lg text-xs font-medium text-center bg-brand-600 text-white shadow-sm border border-brand-500 transition-all flex items-center justify-center gap-1" data-uploader="sve" title="Sve objave zajednice">
+              <i class="ph-bold ph-globe"></i> Sve
+            </button>
+            <button type="button" class="uploader-filter py-1.5 px-1.5 rounded-lg text-xs font-medium text-center bg-slate-800 text-slate-300 hover:bg-slate-750 hover:text-white border border-slate-700/60 transition-all flex items-center justify-center gap-1" data-uploader="verified" title="Registrirani korisnici">
+              <i class="ph-bold ph-check-circle text-emerald-400"></i> Korisnici
+            </button>
+            <button type="button" class="uploader-filter py-1.5 px-1.5 rounded-lg text-xs font-medium text-center bg-slate-800 text-slate-300 hover:bg-slate-750 hover:text-white border border-slate-700/60 transition-all flex items-center justify-center gap-1" data-uploader="anonymous" title="Anonimne objave">
+              <i class="ph-bold ph-mask-happy text-amber-400"></i> Anonimno
+            </button>
+            <button type="button" class="uploader-filter py-1.5 px-1.5 rounded-lg text-xs font-medium text-center bg-slate-800 text-slate-300 hover:bg-slate-750 hover:text-white border border-slate-700/60 transition-all flex items-center justify-center gap-1" data-uploader="ai" title="AI Baza postojećih klupica u RH">
+              <i class="ph-bold ph-sparkle text-purple-400"></i> AI
+            </button>
+          </div>
+        </div>
+
+        <!-- Oznake (Tags) Filter inside Side Panel -->
+        <div class="space-y-1.5">
+          <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+            <i class="ph-bold ph-tag text-brand-400"></i> Oznake
+          </div>
+          <div class="flex flex-wrap gap-1.5" id="tagFilterContainer">
+            <button type="button" class="tag-filter px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-tag="Pogled">🌅 Pogled</button>
+            <button type="button" class="tag-filter px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-tag="U hladu">🌲 U hladu</button>
+            <button type="button" class="tag-filter px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-tag="Kanta za smeće">🗑️ Kanta za smeće</button>
+            <button type="button" class="tag-filter px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-tag="Rasvjeta">💡 Rasvjeta</button>
+            <button type="button" class="tag-filter px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60 transition-all" data-tag="Malo ljudi u okolici">🤫 Malo ljudi u okolici</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bench Cards List Container -->
+      <div id="benchesListContainer" class="flex-1 overflow-y-auto p-3 space-y-3 divide-y divide-slate-800/60 bg-slate-900">
+        <!-- Rendered via JS -->
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Bench Detail Modal / Drawer -->
+  <div id="benchDetailModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-sm hidden opacity-0 transition-opacity duration-200">
+    <div class="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col transform scale-95 transition-transform duration-200" id="benchDetailCard">
+      <!-- Modal Header with Image Gallery -->
+      <div class="relative bg-slate-950 min-h-[220px] sm:min-h-[280px] max-h-[340px] flex items-center justify-center overflow-hidden">
+        <div id="modalGalleryTrack" class="w-full h-full flex transition-transform duration-300">
+          <!-- Gallery photos injected here -->
+        </div>
+
+        <!-- Gallery Controls -->
+        <button id="galleryPrevBtn" class="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center transition-all opacity-0 pointer-events-none">
+          <i class="ph-bold ph-caret-left text-lg"></i>
+        </button>
+        <button id="galleryNextBtn" class="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center transition-all opacity-0 pointer-events-none">
+          <i class="ph-bold ph-caret-right text-lg"></i>
+        </button>
+        <div id="galleryDots" class="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-10"></div>
+
+        <!-- Close Modal Button -->
+        <button id="closeDetailModalBtn" class="absolute top-3 right-3 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center z-10 transition-colors">
+          <i class="ph-bold ph-x text-lg"></i>
+        </button>
+
+        <!-- Condition Badge Overlay -->
+        <div id="modalConditionBadge" class="absolute top-3 left-3 z-10"></div>
+      </div>
+
+      <!-- Modal Body (Scrollable) -->
+      <div class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        <!-- Title and City -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div>
+            <div class="flex items-center gap-2 text-xs text-brand-400 font-semibold mb-1">
+              <i class="ph-bold ph-map-pin"></i>
+              <span id="modalCity">Grad</span>
+              <span class="text-slate-600">•</span>
+              <span id="modalAuthor" class="text-slate-400 font-normal">Dodao/la: Anonimni šetač</span>
+            </div>
+            <h3 id="modalTitle" class="text-xl sm:text-2xl font-bold text-white leading-snug">Naziv klupice</h3>
+          </div>
+          
+          <!-- Actions: Like & Navigate -->
+          <div class="flex items-center gap-2 flex-shrink-0 pt-1 sm:pt-0">
+            <button id="modalLikeBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-900/60 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 text-sm font-semibold transition-colors">
+              <i class="ph-fill ph-heart text-base"></i>
+              <span id="modalLikeCount">0</span>
+            </button>
+            <a id="modalDirectionsLink" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold transition-colors shadow-sm">
+              <i class="ph-bold ph-navigation-arrow"></i>
+              <span>Navigiraj</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- Tags / Badges -->
+        <div id="modalTagsContainer" class="flex flex-wrap gap-1.5"></div>
+
+        <!-- Description -->
+        <div>
+          <h4 class="text-xs uppercase font-bold tracking-wider text-slate-400 mb-1">Opis lokacije</h4>
+          <p id="modalDescription" class="text-sm sm:text-base text-slate-300 leading-relaxed whitespace-pre-line"></p>
+        </div>
+
+        <!-- Comments & Reviews Section -->
+        <div class="border-t border-slate-800 pt-4 mt-6">
+          <h4 class="text-sm font-bold text-white mb-3 flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <i class="ph-bold ph-chat-teardrop-text text-brand-400"></i>
+              <span>Komentari i dojmovi (<span id="modalCommentsCount">0</span>)</span>
+            </span>
+          </h4>
+
+          <!-- New Comment Input -->
+          <form id="commentForm" class="bg-slate-950/80 p-3 rounded-xl border border-slate-800 mb-4 space-y-2">
+            <input 
+              type="text" 
+              id="commentAuthor" 
+              placeholder="Tvoje ime ili nadimak (neobavezno)" 
+              class="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-700 bg-slate-900 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+            >
+            <div class="flex gap-2">
+              <input 
+                type="text" 
+                id="commentContent" 
+                placeholder="Napiši komentar o ovoj klupici..." 
+                required
+                class="flex-1 px-3 py-1.5 text-xs sm:text-sm rounded-lg border border-slate-700 bg-slate-900 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+              >
+              <button 
+                type="submit" 
+                class="px-4 py-1.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
+              >
+                Pošalji
+              </button>
+            </div>
+          </form>
+
+          <!-- Comments List -->
+          <div id="modalCommentsList" class="space-y-2.5">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Bench Modal -->
+  <div id="addBenchModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-sm hidden opacity-0 transition-opacity duration-200">
+    <div class="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-xl w-full max-h-[92vh] overflow-hidden shadow-2xl flex flex-col transform scale-95 transition-transform duration-200">
+      
+      <!-- Modal Header -->
+      <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-brand-600 text-white flex items-center justify-center shadow-sm">
+            <i class="ph-bold ph-plus-circle text-lg"></i>
+          </div>
+          <div>
+            <h3 class="font-bold text-white text-base">Dodaj novu klupicu</h3>
+            <p class="text-xs text-slate-400">Unesite lokaciju i detalje o klupici</p>
+          </div>
+        </div>
+        <button id="closeAddModalBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+          <i class="ph-bold ph-x text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Add Form (Scrollable) -->
+      <form id="addBenchForm" class="flex-1 overflow-y-auto p-5 space-y-4">
+        
+        <!-- Location Banner / Picker Info -->
+        <div class="bg-brand-950/40 border border-brand-800/80 rounded-xl p-3 flex items-start justify-between gap-3">
+          <div class="flex items-start gap-2.5">
+            <i class="ph-bold ph-map-pin text-brand-400 text-xl flex-shrink-0 mt-0.5"></i>
+            <div>
+              <p class="text-xs font-semibold text-brand-300">Koordinate klupice:</p>
+              <p id="pickedCoordsText" class="text-xs text-brand-400 font-mono mt-0.5">Kliknite na kartu ili upotrijebite GPS</p>
+            </div>
+          </div>
+          <button 
+            type="button" 
+            id="useGpsInsideModalBtn" 
+            class="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800 border border-slate-700 text-brand-400 hover:bg-slate-750 hover:border-brand-500 flex items-center gap-1 shadow-sm transition-all flex-shrink-0"
+          >
+            <i class="ph-bold ph-crosshair"></i>
+            <span>Moj GPS</span>
+          </button>
+        </div>
+
+        <input type="hidden" id="benchLatitude" name="latitude" required>
+        <input type="hidden" id="benchLongitude" name="longitude" required>
+
+        <!-- Title & City -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="sm:col-span-2 space-y-1">
+            <label for="benchTitle" class="block text-xs font-semibold text-slate-300">Naziv (neobavezno)</label>
+            <input 
+              type="text" 
+              id="benchTitle" 
+              name="title" 
+              class="w-full px-3 py-2 text-sm rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+            >
+          </div>
+          <div class="space-y-1">
+            <label for="benchCity" class="block text-xs font-semibold text-slate-300">Grad / Mjesto (neobavezno)</label>
+            <input 
+              type="text" 
+              id="benchCity" 
+              name="city" 
+              placeholder="npr. Split" 
+              class="w-full px-3 py-2 text-sm rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+            >
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="space-y-1">
+          <label for="benchDescription" class="block text-xs font-semibold text-slate-300">Opis klupice (neobavezno)</label>
+          <textarea 
+            id="benchDescription" 
+            name="description" 
+            rows="3" 
+            class="w-full px-3 py-2 text-sm rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+          ></textarea>
+        </div>
+
+        <!-- Photos Upload Area -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-slate-300">Fotografije klupice (neobavezno)</label>
+          
+          <div 
+            id="dropZone" 
+            class="border-2 border-dashed border-slate-700 hover:border-brand-500 bg-slate-950/60 hover:bg-slate-800/40 rounded-xl p-4 text-center cursor-pointer transition-colors"
+          >
+            <input 
+              type="file" 
+              id="photoInput" 
+              name="photos" 
+              accept="image/*" 
+              multiple 
+              class="hidden"
+            >
+            <div class="flex flex-col items-center justify-center gap-1.5">
+              <i class="ph-bold ph-camera text-2xl text-slate-400"></i>
+              <p class="text-xs text-slate-300 font-medium">Kliknite za odabir fotografije ili je prevucite ovdje</p>
+              <p class="text-[11px] text-slate-500">Podržano: JPG, PNG, WEBP (Automatska optimizacija slika)</p>
+            </div>
+          </div>
+
+          <!-- Selected Photos Preview Grid -->
+          <div id="photosPreviewGrid" class="grid grid-cols-4 gap-2 pt-1 empty:hidden"></div>
+        </div>
+
+        <!-- Bench Tier Rating System -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-slate-300">Ocjena klupice (Tier lista)</label>
+          <div class="grid grid-cols-6 gap-1.5">
+            <label class="cursor-pointer">
+              <input type="radio" name="condition" value="Peak" class="peer hidden">
+              <div class="p-2 text-center rounded-xl border border-slate-800 bg-slate-950 peer-checked:border-purple-500 peer-checked:bg-purple-950/40 transition-all flex flex-col items-center">
+                <span class="text-sm font-black text-purple-400">Peak</span>
+                <span class="text-[9px] text-slate-400 font-semibold uppercase">Tier</span>
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="condition" value="S" class="peer hidden">
+              <div class="p-2 text-center rounded-xl border border-slate-800 bg-slate-950 peer-checked:border-amber-500 peer-checked:bg-amber-950/40 transition-all flex flex-col items-center">
+                <span class="text-sm font-black text-amber-400">S</span>
+                <span class="text-[9px] text-slate-400 font-semibold uppercase">Super</span>
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="condition" value="A" class="peer hidden" checked>
+              <div class="p-2 text-center rounded-xl border border-slate-800 bg-slate-950 peer-checked:border-emerald-500 peer-checked:bg-emerald-950/40 transition-all flex flex-col items-center">
+                <span class="text-sm font-black text-emerald-400">A</span>
+                <span class="text-[9px] text-slate-400 font-semibold uppercase">Odlična</span>
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="condition" value="B" class="peer hidden">
+              <div class="p-2 text-center rounded-xl border border-slate-800 bg-slate-950 peer-checked:border-blue-500 peer-checked:bg-blue-950/40 transition-all flex flex-col items-center">
+                <span class="text-sm font-black text-blue-400">B</span>
+                <span class="text-[9px] text-slate-400 font-semibold uppercase">Dobra</span>
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="condition" value="C" class="peer hidden">
+              <div class="p-2 text-center rounded-xl border border-slate-800 bg-slate-950 peer-checked:border-slate-500 peer-checked:bg-slate-800/60 transition-all flex flex-col items-center">
+                <span class="text-sm font-black text-slate-300">C</span>
+                <span class="text-[9px] text-slate-400 font-semibold uppercase">Osrednja</span>
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="condition" value="F" class="peer hidden">
+              <div class="p-2 text-center rounded-xl border border-slate-800 bg-slate-950 peer-checked:border-rose-500 peer-checked:bg-rose-950/40 transition-all flex flex-col items-center">
+                <span class="text-sm font-black text-rose-400">F</span>
+                <span class="text-[9px] text-slate-400 font-semibold uppercase">Loša</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Tags / Features -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-slate-300">Oznake (neobavezno)</label>
+          <div class="flex flex-wrap gap-1.5" id="tagsSelectContainer">
+            <button type="button" class="tag-toggle-btn px-2.5 py-1 text-xs rounded-full border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all" data-tag="Pogled">🌅 Pogled</button>
+            <button type="button" class="tag-toggle-btn px-2.5 py-1 text-xs rounded-full border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all" data-tag="U hladu">🌲 U hladu</button>
+            <button type="button" class="tag-toggle-btn px-2.5 py-1 text-xs rounded-full border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all" data-tag="Kanta za smeće">🗑️ Kanta za smeće</button>
+            <button type="button" class="tag-toggle-btn px-2.5 py-1 text-xs rounded-full border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all" data-tag="Rasvjeta">💡 Rasvjeta</button>
+            <button type="button" class="tag-toggle-btn px-2.5 py-1 text-xs rounded-full border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all" data-tag="Malo ljudi u okolici">🤫 Malo ljudi u okolici</button>
+          </div>
+        </div>
+
+        <!-- Author / Anonymous Posting Options -->
+        <div id="authorIdentityBox" class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs gap-3">
+          <div class="flex items-center gap-2 min-w-0">
+            <i class="ph-bold ph-user-circle text-base text-brand-400 flex-shrink-0"></i>
+            <div class="truncate">
+              <span class="text-slate-400">Objavljuješ kao: </span>
+              <span id="currentAuthorLabel" class="font-bold text-slate-200">Anonimni šetač</span>
+            </div>
+          </div>
+          <!-- Toggle checkbox for logged-in users who wish to post anonymously -->
+          <label id="anonymousToggleContainer" class="hidden items-center gap-2 cursor-pointer select-none flex-shrink-0">
+            <input type="checkbox" id="postAsAnonymousCheckbox" class="w-4 h-4 rounded border-slate-700 bg-slate-850 text-brand-600 focus:ring-brand-500 cursor-pointer">
+            <span class="text-xs text-slate-400 hover:text-slate-200">Objavi anonimno</span>
+          </label>
+        </div>
+
+        <!-- Submit Button -->
+        <div class="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+          <button 
+            type="button" 
+            id="cancelAddBtn" 
+            class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+          >
+            Odustani
+          </button>
+          <button 
+            type="submit" 
+            id="submitBenchBtn" 
+            class="px-5 py-2 text-xs sm:text-sm font-semibold text-white bg-brand-600 hover:bg-brand-500 rounded-lg shadow-md shadow-brand-600/30 active:scale-95 transition-all flex items-center gap-1.5"
+          >
+            <i class="ph-bold ph-check"></i>
+            <span>Objavi klupicu</span>
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- Supabase Settings Modal -->
+  <div id="supabaseSettingsModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-sm hidden opacity-0 transition-opacity duration-200">
+    <div class="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col transform scale-95 transition-transform duration-200">
+      <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold">⚡</div>
+          <div>
+            <h3 class="font-bold text-white text-sm sm:text-base">Povezivanje sa Supabase bazom</h3>
+            <p class="text-xs text-slate-400">Trajno spremanje klupica i slika u oblaku</p>
+          </div>
+        </div>
+        <button id="closeSupabaseSettingsBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+          <i class="ph-bold ph-x text-lg"></i>
+        </button>
+      </div>
+
+      <form id="supabaseSettingsForm" class="p-5 space-y-4 text-xs sm:text-sm">
+        <div class="p-3 bg-emerald-950/40 border border-emerald-800/80 rounded-xl text-emerald-300 text-xs space-y-1">
+          <p class="font-bold">Kako doći do ovih podataka (2 minute):</p>
+          <ol class="list-decimal list-inside space-y-0.5 text-emerald-400/90">
+            <li>Otvorite besplatni račun na <a href="https://supabase.com" target="_blank" class="underline font-bold text-emerald-300">supabase.com</a></li>
+            <li>Kreirajte novi projekt (nazovite ga npr. <i>klupice</i>)</li>
+            <li>Otvorite <b>SQL Editor</b> i zalijepite sadržaj datoteke <code class="bg-slate-800 px-1 py-0.5 rounded border border-emerald-800 text-emerald-300">supabase_schema.sql</code> te kliknite <b>Run</b></li>
+            <li>U <b>Project Settings -> API</b> kopirajte <b>Project URL</b> i <b>anon public API ključ</b>.</li>
+          </ol>
+        </div>
+
+        <div class="space-y-1">
+          <label for="inputSupabaseUrl" class="block font-semibold text-slate-300">Project URL</label>
+          <input 
+            type="url" 
+            id="inputSupabaseUrl" 
+            placeholder="https://xyzabcdefg.supabase.co" 
+            required
+            class="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none font-mono text-xs"
+          >
+        </div>
+
+        <div class="space-y-1">
+          <label for="inputSupabaseKey" class="block font-semibold text-slate-300">anon public API ključ</label>
+          <input 
+            type="text" 
+            id="inputSupabaseKey" 
+            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." 
+            required
+            class="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none font-mono text-xs"
+          >
+        </div>
+
+        <div class="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+          <button 
+            type="submit" 
+            class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg shadow-sm transition-all text-xs"
+          >
+            Spremi i poveži bazu
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Auth Modal (Login / Sign Up) -->
+  <div id="authModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-sm hidden opacity-0 transition-opacity duration-200">
+    <div class="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col transform scale-95 transition-transform duration-200">
+      
+      <!-- Modal Header -->
+      <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-brand-600 text-white flex items-center justify-center shadow-sm">
+            <i class="ph-bold ph-user text-base"></i>
+          </div>
+          <div>
+            <h3 id="authModalTitle" class="font-bold text-white text-base">Prijava na račun</h3>
+            <p id="authModalSubtitle" class="text-xs text-slate-400">Prijava putem korisničkog imena ili e-maila</p>
+          </div>
+        </div>
+        <button id="closeAuthModalBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+          <i class="ph-bold ph-x text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Tabs: Prijava / Registracija -->
+      <div class="flex border-b border-slate-800 bg-slate-950/60 p-1">
+        <button id="authTabLogin" type="button" class="flex-1 py-2 text-xs font-bold rounded-lg text-white bg-slate-800 shadow-sm transition-all text-center">
+          Prijava
+        </button>
+        <button id="authTabRegister" type="button" class="flex-1 py-2 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200 transition-all text-center">
+          Registracija
+        </button>
+      </div>
+
+      <!-- Auth Form -->
+      <form id="authForm" class="p-5 space-y-3.5 text-xs sm:text-sm">
+        <!-- Error Message Alert -->
+        <div id="authAlert" class="hidden p-3 rounded-lg text-xs font-medium border"></div>
+
+        <!-- Username (Only shown on register) -->
+        <div id="authUsernameField" class="space-y-1 hidden">
+          <label for="authUsernameInput" class="block font-semibold text-slate-300">Korisničko ime / Nadimak</label>
+          <input 
+            type="text" 
+            id="authUsernameInput" 
+            placeholder="npr. Luka ZG" 
+            class="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none text-xs"
+          >
+        </div>
+
+        <!-- Identifier (Username or Email) -->
+        <div class="space-y-1">
+          <label id="authEmailLabel" for="authEmailInput" class="block font-semibold text-slate-300">Korisničko ime ili E-mail</label>
+          <input 
+            type="text" 
+            id="authEmailInput" 
+            placeholder="Korisničko ime ili e-mail adresa" 
+            required
+            class="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none text-xs"
+          >
+        </div>
+
+        <!-- Password -->
+        <div class="space-y-1">
+          <label for="authPasswordInput" class="block font-semibold text-slate-300">Lozinka</label>
+          <input 
+            type="password" 
+            id="authPasswordInput" 
+            placeholder="Najmanje 6 znakova" 
+            required
+            minlength="6"
+            class="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-brand-500 focus:outline-none text-xs"
+          >
+        </div>
+
+        <!-- Submit Button -->
+        <div class="pt-2">
+          <button 
+            type="submit" 
+            id="authSubmitBtn"
+            class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 text-white font-semibold rounded-lg shadow-md shadow-brand-600/30 transition-all text-xs flex items-center justify-center gap-1.5"
+          >
+            <i class="ph-bold ph-sign-in"></i>
+            <span>Prijavi se</span>
+          </button>
+        </div>
+
+        <!-- Switch Tab Hint -->
+        <p class="text-center text-xs text-slate-400 pt-1">
+          <span id="authSwitchPrompt">Nemaš račun?</span>
+          <button type="button" id="authSwitchBtn" class="text-brand-400 font-semibold hover:underline ml-1">
+            Registriraj se
+          </button>
+        </p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 bg-slate-800 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 flex items-center gap-2.5 text-sm transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none">
+    <i id="toastIcon" class="ph-bold ph-check-circle text-brand-400 text-lg"></i>
+    <span id="toastMessage">Poruka</span>
+  </div>
+
+  <!-- Application Scripts -->
+  <script src="./js/config.js"></script>
+  <script src="./js/borders.js"></script>
+  <script src="./js/ai-benches.js"></script>
+  <script src="./js/supabase-client.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
